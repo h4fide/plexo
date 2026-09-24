@@ -1,5 +1,9 @@
 appId: com.plexo.app
 productName: Plexo
+protocols:
+  - name: Plexo Download
+    schemes:
+      - plexo
 directories:
   buildResources: build
 files:

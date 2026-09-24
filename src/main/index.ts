@@ -19,6 +19,54 @@ if (testKnobs.userDataDir) app.setPath('userData', testKnobs.userDataDir)
 let mainWindow: BrowserWindow | null = null
 let downloadManager: DownloadManager | null = null
 let quitAfterSuspending = false
+let pendingProtocolUrl: string | null = null
+
+function handleIncomingProtocolUrl(value: string): void {
+  try {
+    const protocolUrl = new URL(value)
+    if (protocolUrl.protocol !== 'plexo:') return
+
+    const downloadUrl = protocolUrl.searchParams.get('url')
+    if (!downloadUrl) return
+
+    const targetUrl = new URL(downloadUrl)
+    if (!['http:', 'https:'].includes(targetUrl.protocol)) return
+
+    pendingProtocolUrl = targetUrl.toString()
+    console.info('[plexo] received protocol URL', pendingProtocolUrl)
+  } catch {
+    console.warn('[plexo] ignored invalid protocol URL')
+  }
+}
+
+function protocolUrlFromArgs(args: string[]): string | undefined {
+  return args.find((argument) => argument.startsWith('plexo://'))
+}
+
+const gotLock = app.requestSingleInstanceLock()
+
+if (!gotLock) {
+  app.quit()
+} else {
+  const initialProtocolUrl = protocolUrlFromArgs(process.argv)
+  if (initialProtocolUrl) handleIncomingProtocolUrl(initialProtocolUrl)
+
+  app.on('second-instance', (_event, commandLine) => {
+    const protocolUrl = protocolUrlFromArgs(commandLine)
+    if (protocolUrl) handleIncomingProtocolUrl(protocolUrl)
+
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
+
+  app.on('open-url', (event, value) => {
+    event.preventDefault()
+    handleIncomingProtocolUrl(value)
+  })
+}
 
 // Only wired in dev — mirrors the default Electron menu (app/edit/view/window) plus one item to
 // toggle the renderer's floating simulate-download panel, which itself only renders in dev.
@@ -93,7 +141,18 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  if (!gotLock) return
+
   electronApp.setAppUserModelId('com.plexo.app')
+
+  if (process.defaultApp) {
+    const devEntryPoint = process.argv[1]
+    if (devEntryPoint) {
+      app.setAsDefaultProtocolClient('plexo', process.execPath, [devEntryPoint])
+    }
+  } else {
+    app.setAsDefaultProtocolClient('plexo')
+  }
 
   // A failed move keeps the old file, to retry next launch — it must never stop the window opening.
   await migrateLegacyNetworkPreferences().catch((error) =>
